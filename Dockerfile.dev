@@ -1,0 +1,19 @@
+# Development image for einsum_nvqir
+# Pre-installs build tools on top of CUDA-Q base image
+
+FROM nvcr.io/nvidia/nightly/cuda-quantum:cu12-latest
+
+USER root
+
+# Install build dependencies (only done once when building this image)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    cmake \
+    g++ \
+    make \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /workspace
+
+# Default entrypoint for interactive use
+ENTRYPOINT ["/bin/bash"]

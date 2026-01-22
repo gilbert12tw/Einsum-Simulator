@@ -1,0 +1,13 @@
+
+#ifndef EINSUM_NVQIR_EINSUMSIMULATOR_H
+#define EINSUM_NVQIR_EINSUMSIMULATOR_H
+
+
+
+class EinsumSimulator {
+
+};
+
+
+
+#endif //EINSUM_NVQIR_EINSUMSIMULATOR_H
