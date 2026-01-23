@@ -1,132 +1,83 @@
 # Einsum NVQIR Simulator
 
-A CUDA-Q NVQIR simulator that intercepts quantum gates and builds Einsum expressions for tensor network contraction.
+Convert CUDA-Q quantum circuits to einsum tensor network representation for use with `torch.einsum` or `opt_einsum`.
 
-## Project Structure
+## Features
 
-```
-einsum_nvqir/
-├── src/
-│   └── EinsumSimulator.cpp    # Main simulator implementation
-├── tests/
-│   └── test_einsum.py         # Python test script
-├── scripts/
-│   ├── docker-build.sh        # Build script using Docker
-│   ├── docker-test.sh         # Test script using Docker
-│   └── docker-shell.sh        # Interactive Docker shell
-├── build/                     # Build output directory
-├── CMakeLists.txt             # CMake configuration
-└── README.md
-```
+- Intercept CUDA-Q gate operations and capture full gate matrices
+- Integer index system
+- Output PyTorch sublist format for large circuits
 
-## Requirements
+## Installation
 
-- Docker with `nvcr.io/nvidia/nightly/cuda-quantum:cu12-latest` image
-- (Optional) CLion IDE for development
-
-## Quick Start
-
-### 1. Build the simulator
+Requires CUDA-Q environment. Build the simulator:
 
 ```bash
-./scripts/docker-build.sh
+mkdir build && cd build
+cmake ..
+make
 ```
 
-This will:
-- Start a Docker container with CUDA-Q
-- Install build dependencies (cmake, g++)
-- Compile `libnvqir-einsum.so`
+## Usage
 
-### 2. Test the simulator
-
-```bash
-./scripts/docker-test.sh
-```
-
-This will:
-- Copy the library to CUDA-Q's lib directory
-- Create the target configuration
-- Run Python tests
-
-### 3. Interactive development
-
-```bash
-./scripts/docker-shell.sh
-```
-
-This opens an interactive shell in the Docker container.
-
-## Usage in Python
+### 1. Capture Circuit
 
 ```python
-import cudaq
-
-# Set the Einsum simulator as target
-cudaq.set_target("einsum")
+from cudaq_einsum import capture_circuit
 
 @cudaq.kernel
-def my_circuit():
-    q = cudaq.qvector(2)
-    h(q[0])
-    cx(q[0], q[1])
+def ghz(n: int):
+    qubits = cudaq.qvector(n)
+    h(qubits[0])
+    for i in range(n - 1):
+        cx(qubits[i], qubits[i + 1])
 
-# Run the circuit - this will print Einsum index tracking
-results = cudaq.sample(my_circuit)
+# Execute kernel and capture circuit structure
+circuit = capture_circuit(ghz, 3)
 ```
 
-## CLion Development Setup
+### 2. Convert to Einsum and Execute
 
-### Option 1: Remote Docker Toolchain (Recommended)
+```python
+import torch
 
-1. Open CLion Settings → Build, Execution, Deployment → Toolchains
-2. Add a new "Docker" toolchain
-3. Set the image to `nvcr.io/nvidia/nightly/cuda-quantum:cu12-latest`
-4. Configure CMake options: `-DCUDAQ_ROOT=/opt/nvidia/cudaq`
+# Get torch.einsum sublist format arguments
+args = circuit.to_torch_sublist_args()
+state = torch.einsum(*args)
 
-### Option 2: Use Docker scripts directly
-
-CLion can run the build scripts as external tools:
-1. Settings → Tools → External Tools → Add
-2. Configure `docker-build.sh` as a build tool
-3. Configure `docker-test.sh` as a run tool
-
-### Header Files for Code Completion
-
-To enable code completion in CLion without Docker:
-
-1. Extract headers from the Docker image:
-```bash
-docker run --rm -v $(pwd):/out nvcr.io/nvidia/nightly/cuda-quantum:cu12-latest \
-    bash -c "cp -r /opt/nvidia/cudaq/include /out/cudaq-include"
+print(state)  # GHZ state: [0.707, 0, 0, 0, 0, 0, 0, 0.707]
 ```
 
-2. Add to CMakeLists.txt:
-```cmake
-if(EXISTS "${CMAKE_SOURCE_DIR}/cudaq-include")
-    include_directories(${CMAKE_SOURCE_DIR}/cudaq-include)
-endif()
+### 3. Or Use opt_einsum
+
+```python
+import opt_einsum
+
+tensors, indices, output = circuit.to_operands_and_subscripts()
+# Compose your own opt_einsum call
 ```
 
-## API Overview
+## Why Integer Indices?
 
-The `EinsumBuilder` class inherits from `nvqir::CircuitSimulatorBase<double>` and implements:
+Traditional einsum string format `"ij,jk->ik"` only supports character indices, which is insufficient for large circuits.
 
-| Method | Description |
-|--------|-------------|
-| `addQubitToState()` | Allocate and track a new qubit index |
-| `applyGate(task)` | Intercept gate operations and record indices |
-| `measureQubit(idx)` | Handle qubit measurement |
-| `sample(qubits, shots)` | Return sampling results |
+This project uses PyTorch sublist format:
+```python
+# String format 
+torch.einsum("ij,jk->ik", A, B)
 
-## Next Steps for Development
+# Sublist format 
+torch.einsum(A, [0, 1], B, [1, 2], [0, 2])
+```
 
-1. **Generate proper Einsum strings**: Convert gate records to standard Einsum notation
-2. **Store gate matrices**: Compute and store rotation matrices with resolved parameters
-3. **cuTensorNet integration**: Build `cutensornetNetworkDescriptor` directly
-4. **Export functionality**: Add methods to export the tensor network graph
+## Status
 
-## References
+- [x] C++ Sidecar API
+- [x] Gate matrix capture
+- [x] JSON serialization
+- [ ] Python wrapper
+- [ ] End-to-end tests
 
-- [CUDA-Q Documentation](https://nvidia.github.io/cuda-quantum/)
-- [NVQIR Architecture](https://nvidia.github.io/cuda-quantum/latest/using/backends.html)
-- [cuTensorNet](https://docs.nvidia.com/cuda/cutensor/)
+## License
+
+MIT
