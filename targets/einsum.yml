@@ -1,0 +1,9 @@
+# ============================================================================ #
+# Einsum NVQIR Simulator Target                                                #
+# ============================================================================ #
+
+name: einsum
+description: "Einsum-based simulator that captures quantum circuits as tensor networks for external contraction."
+config:
+  nvqir-simulation-backend: einsum
+  preprocessor-defines: ["-D CUDAQ_SIMULATION_SCALAR_FP64"]
