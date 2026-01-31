@@ -26,3 +26,4 @@ compile_commands.json
 
 # other
 docs/
+__pycache_/
