@@ -5,56 +5,20 @@ This tests whether we can extract circuit data from the C++ simulator via ctypes
 """
 
 import cudaq
-import ctypes
 import json
 import os
-
-# Path to the einsum library
-LIB_PATH = "/opt/nvidia/cudaq/lib/libnvqir-einsum.so"
-
-def load_einsum_library():
-    """Load the einsum library and setup ctypes interfaces."""
-    if not os.path.exists(LIB_PATH):
-        raise FileNotFoundError(f"Library not found: {LIB_PATH}")
-
-    lib = ctypes.CDLL(LIB_PATH)
-
-    # Setup function signatures
-    lib.get_einsum_length.argtypes = []
-    lib.get_einsum_length.restype = ctypes.c_int
-
-    lib.get_einsum_data.argtypes = [ctypes.c_char_p]
-    lib.get_einsum_data.restype = None
-
-    lib.clear_einsum_buffer.argtypes = []
-    lib.clear_einsum_buffer.restype = None
-
-    return lib
-
-def get_einsum_json(lib):
-    """Retrieve the einsum JSON from the sidecar buffer."""
-    length = lib.get_einsum_length()
-    if length <= 0:
-        return None
-
-    # Create buffer and copy data
-    buffer = ctypes.create_string_buffer(length + 1)
-    lib.get_einsum_data(buffer)
-
-    # Decode and parse JSON
-    json_str = buffer.value.decode('utf-8')
-    return json_str
+from cudaq_einsum import EinsumSidecar
 
 def main():
     print("=" * 60)
     print("Testing Sidecar Ctypes Approach")
     print("=" * 60)
 
-    # Step 1: Load library
+    # Step 1: Load library via EinsumSidecar
     print("\n[1] Loading einsum library...")
     try:
-        lib = load_einsum_library()
-        print(f"    Library loaded: {LIB_PATH}")
+        sidecar = EinsumSidecar()
+        print(f"    Library loaded: {sidecar.lib_path}")
     except Exception as e:
         print(f"    ERROR: {e}")
         return False
@@ -78,14 +42,14 @@ def main():
 
     # Step 4: Clear buffer and run kernel
     print("\n[4] Clearing buffer and running kernel...")
-    lib.clear_einsum_buffer()
+    sidecar.clear()
 
     result = cudaq.sample(ghz_kernel, shots_count=10)
     print(f"    Sample result: {result}")
 
     # Step 5: Retrieve sidecar data
     print("\n[5] Retrieving data from sidecar buffer...")
-    json_str = get_einsum_json(lib)
+    json_str = sidecar.get_circuit_json()
 
     if json_str:
         print(f"    Buffer length: {len(json_str)} bytes")

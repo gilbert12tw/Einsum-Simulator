@@ -31,29 +31,8 @@ docker run --rm \
     -c "
         set -e
 
-        # Copy our library to CUDA-Q's lib directory
-        cp ${CONTAINER_PROJECT_DIR}/build/libnvqir-einsum.so /opt/nvidia/cudaq/lib/
-
-        # Create a proper YAML target configuration file
-        cat > /opt/nvidia/cudaq/targets/einsum.yml << 'EOF'
-# Einsum Builder Target Configuration
-name: einsum
-description: \"Einsum expression builder simulator for tensor network conversion\"
-config:
-  nvqir-simulation-backend: einsum
-  preprocessor-defines: [\"-D CUDAQ_SIMULATION_SCALAR_FP64\"]
-EOF
-
-        echo '>>> Library installed:'
-        ls -la /opt/nvidia/cudaq/lib/libnvqir-einsum.so
-
-        echo ''
-        echo '>>> Target configuration:'
-        cat /opt/nvidia/cudaq/targets/einsum.yml
-
-        echo ''
-        echo '>>> Running Python test...'
-        python3 ${CONTAINER_PROJECT_DIR}/tests/test_einsum.py
+        # Execute unified build and test script inside the container
+        bash ${CONTAINER_PROJECT_DIR}/scripts/build-and-test.sh
     "
 
 echo "=== Test completed ==="

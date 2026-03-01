@@ -20,27 +20,7 @@ if ! docker image inspect "$IMAGE_NAME" &> /dev/null; then
     echo ""
 fi
 
-# Run build in container (fast - tools already installed)
-docker run --rm \
-    -v "$PROJECT_DIR:$CONTAINER_PROJECT_DIR" \
-    -w "$CONTAINER_PROJECT_DIR" \
-    "$IMAGE_NAME" \
-    -c '
-        set -e
-        echo ">>> Creating build directory..."
-        mkdir -p build
-        cd build
-
-        echo ">>> Running CMake..."
-        cmake .. -DCUDAQ_ROOT=/opt/nvidia/cudaq
-
-        echo ">>> Building..."
-        make -j$(nproc) VERBOSE=1
-
-        echo ">>> Build complete!"
-        ls -la libnvqir-einsum.so
-    '
-
-echo "=== Build finished ==="
-echo "Output: $PROJECT_DIR/build/libnvqir-einsum.so"
-ls -la "$PROJECT_DIR/build/libnvqir-einsum.so"
+# Docker build and test are now unified.
+echo "Note: In the new pip-based workflow, building and testing in Docker are combined."
+echo "Delegating to docker-test.sh..."
+exec "$SCRIPT_DIR/docker-test.sh"
