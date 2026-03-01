@@ -24,14 +24,14 @@ else()
     include_directories(${CUDAQ_ROOT}/include)
 endif()
 
-include_directories(${CMAKE_SOURCE_DIR}/src)
+include_directories(${CMAKE_SOURCE_DIR}/cpp)
 
 # Link directories
 link_directories(${CUDAQ_ROOT}/lib)
 
 # Source files
 set(SOURCES
-    src/EinsumSimulator.cpp
+    cpp/EinsumSimulator.cpp
 )
 
 # Build the shared library
