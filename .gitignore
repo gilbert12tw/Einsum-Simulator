@@ -27,3 +27,12 @@ compile_commands.json
 # other
 docs/
 __pycache_/
+
+# Python packaging and debug files
+*.egg-info/
+__pycache__/
+build/
+dist/
+pip_build_debug.txt
+test_build.py
+logs/
