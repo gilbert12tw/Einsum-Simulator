@@ -13,6 +13,7 @@ Note: The `benchmarks/` folder in the repository contains cutting-edge research 
 - Integer index system — no alphabet limit; real circuits exceed 52 unique indices
 - Output in interleaved (sublist) format compatible with cuQuantum `Network`, `opt_einsum`, and PyTorch
 - Works with `cuquantum.tensornet.Network`, `opt_einsum`, `torch.einsum`, and other contraction backends
+- **Batched evaluation** — evaluate B parameter sets in a single einsum contraction; see [Batched evaluation](#batched-evaluation)
 
 ## Prerequisites
 
@@ -163,6 +164,94 @@ state_vector = circuit.get_state_vector()
 print(state_vector)
 ```
 
+## Batched evaluation
+
+CUDA-Q cannot natively evaluate parameterized circuits for multiple parameter
+sets simultaneously.  The batched API exploits the tensor-network
+representation: for each parametric gate, a *(B, 2, 2)* batch of rotation
+matrices replaces the usual *(2, 2)* tensor, and a single einsum contraction
+returns *B* amplitudes at once.  This avoids re-running the CUDA-Q kernel
+per parameter set and is directly compatible with `cuQuantum`'s `Network` API.
+
+### Quick start
+
+```python
+import numpy as np
+import cudaq
+from cudaq_einsum import (
+    capture_circuit, make_rotation_matrices,
+    build_batched_args, batched_contract,
+)
+
+@cudaq.kernel
+def feature_map(x: list[float], neg_y: list[float], n: int):
+    q = cudaq.qvector(n)
+    for i in range(n):
+        h(q[i])
+        rz(x[i], q[i])
+        ry(x[i], q[i])
+    for i in range(n - 1):
+        cx(q[i], q[i + 1])
+    for i in range(n):
+        rz(neg_y[i], q[i])
+        ry(neg_y[i], q[i])
+    for i in range(n):
+        h(q[i])
+
+n = 4
+# 1. Capture once with dummy parameters
+circuit = capture_circuit(feature_map, [0.0]*n, [0.0]*n, n)
+
+# 2. Identify parametric gates (returns positions + gate-type codes)
+positions, codes_list, info_list = circuit.get_parametric_gate_info(
+    gate_names=['rx', 'ry', 'rz']
+)
+codes = np.array(codes_list)   # (P,) int array: rx=0, ry=1, rz=2, p/r1=3
+
+# 3. Build (B, P) angle matrix — one row per parameter set
+B = 64
+thetas = np.random.uniform(-np.pi, np.pi, (B, len(positions)))
+
+# 4. Build (B, P, 2, 2) complex128 rotation matrices
+rot_mats = make_rotation_matrices(thetas, codes, backend='numpy')
+# backend='torch' for GPU / autograd support
+
+# 5. Single batched contraction → (B,) complex amplitudes
+amplitudes = batched_contract(circuit, positions, rot_mats, mode='amplitude')
+kernel_values = np.abs(amplitudes) ** 2   # (B,) real
+
+# For large circuits: use cuQuantum Network directly
+# args = build_batched_args(circuit, positions, rot_mats, mode='amplitude')
+# network = Network(*args, options=NetworkOptions(device_id=0))
+# amplitudes = network.contract()
+```
+
+Both `mode='amplitude'` (returns a scalar ⟨target|ψ⟩ per batch item) and
+`mode='statevector'` (returns the full *(B, 2, 2, …, 2)* state tensor) are
+supported.
+
+A complete, runnable QSVM example is in [`examples/11_qsvm_batching.py`](examples/11_qsvm_batching.py).
+
+### Batching API reference
+
+| Function / Method | Description |
+|---|---|
+| `make_rotation_matrices(thetas, codes, backend, device)` | Build `(B, P, 2, 2)` rotation matrices for a batch of parameter sets |
+| `build_batched_args(circuit, positions, rot_mats, mode, target_state)` | Build sublist einsum args with batch dimension |
+| `batched_contract(circuit, positions, rot_mats, mode, target_state)` | Convenience wrapper: build args + contract |
+| `EinsumCircuit.get_parametric_gate_info(gate_names)` | Identify parametric gates; returns `(positions, codes, info_list)` |
+
+**Gate-type codes**: `rx=0`, `ry=1`, `rz=2`, `r1/p=3`
+
+**Modes**:
+- `'amplitude'` — project onto a basis state; output `(B,)` complex. Default target state is `|0...0⟩`.
+- `'statevector'` — full output tensor `(B, 2, 2, ..., 2)`.
+
+> **Note:** `numpy.einsum` hangs on deep circuits (>~10 gates).
+> `batched_contract` automatically uses `opt_einsum` when available.
+> For production, pass the output of `build_batched_args()` directly to
+> `cuQuantum`'s `Network` for GPU acceleration and optimal path finding.
+
 ## API reference
 
 | Function / Method | Description |
@@ -173,8 +262,9 @@ print(state_vector)
 | `EinsumCircuit.to_torch_sublist_args()` | PyTorch sublist format args |
 | `EinsumCircuit.to_einsum_sublist_args()` | Integer index format (operands, subscripts) |
 | `EinsumCircuit.to_einsum_args()` | NumPy string format |
-| `EinsumCircuit.get_state_vector()` | Contracted state as 1D array |
+| `EinsumCircuit.get_state_vector()` | Contracted state as 1D array (small circuits only) |
 | `EinsumCircuit.contract()` | Contracted state as N-D tensor |
+| `EinsumCircuit.get_parametric_gate_info(gate_names)` | Identify parametric gates for batching |
 
 ## Suppressing log output
 

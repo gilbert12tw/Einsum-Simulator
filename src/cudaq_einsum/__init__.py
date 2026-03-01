@@ -32,12 +32,14 @@ __version__ = "0.1.0"
 # Support both package import and direct path import
 try:
     from .einsum_sidecar import EinsumSidecar
-    from .einsum_circuit import EinsumCircuit
+    from .einsum_circuit import EinsumCircuit, ParametricGateInfo, PARAMETRIC_GATE_CODES
     from .cudaq_einsum import capture_circuit
+    from .batched import make_rotation_matrices, build_batched_args, batched_contract
 except ImportError:
     from einsum_sidecar import EinsumSidecar
-    from einsum_circuit import EinsumCircuit
+    from einsum_circuit import EinsumCircuit, ParametricGateInfo, PARAMETRIC_GATE_CODES
     from cudaq_einsum import capture_circuit
+    from batched import make_rotation_matrices, build_batched_args, batched_contract
 
 
 def _find_cudaq_root() -> Optional[str]:
@@ -160,6 +162,11 @@ def install_cudaq_target(cudaq_root: Optional[str] = None) -> str:
 __all__ = [
     "EinsumSidecar",
     "EinsumCircuit",
+    "ParametricGateInfo",
+    "PARAMETRIC_GATE_CODES",
     "capture_circuit",
     "install_cudaq_target",
+    "make_rotation_matrices",
+    "build_batched_args",
+    "batched_contract",
 ]

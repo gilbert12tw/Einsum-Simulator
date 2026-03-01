@@ -12,6 +12,19 @@ from typing import List, Tuple, Optional, Any
 import numpy as np
 
 
+PARAMETRIC_GATE_CODES = {'rx': 0, 'ry': 1, 'rz': 2, 'r1': 3, 'p': 3}
+
+
+@dataclass
+class ParametricGateInfo:
+    """Information about a single parametric (rotation) gate."""
+    position: int       # Index into circuit.gates / gate_tensors
+    gate_name: str      # 'rx', 'ry', 'rz', 'r1', 'p'
+    gate_code: int      # 0=rx, 1=ry, 2=rz, 3=p/r1
+    qubit: int          # Target qubit index
+    original_param: float
+
+
 @dataclass
 class GateInfo:
     """Information about a single gate operation."""
@@ -249,6 +262,59 @@ class EinsumCircuit:
             1D complex array of length 2^num_qubits.
         """
         return self.contract().flatten()
+
+    def get_parametric_gate_info(self, gate_names=None):
+        """
+        Identify parametric (rotation) gates in the circuit.
+
+        Args:
+            gate_names: Set/list of gate names to treat as parametric.
+                        Defaults to PARAMETRIC_GATE_CODES keys.
+
+        Returns:
+            Tuple of (positions, codes, info_list):
+              - positions: list[int] — indices into gates/gate_tensors
+              - codes: list[int] — gate type codes (rx=0, ry=1, rz=2, p/r1=3)
+              - info_list: list[ParametricGateInfo]
+
+        Raises:
+            ValueError: If a parametric gate is a controlled gate (multi-qubit).
+        """
+        if gate_names is None:
+            gate_names = set(PARAMETRIC_GATE_CODES.keys())
+        else:
+            gate_names = set(gate_names)
+
+        positions = []
+        codes = []
+        info_list = []
+
+        for i, g in enumerate(self.gates):
+            if g.name in gate_names:
+                if len(g.controls) > 0:
+                    raise ValueError(
+                        f"Gate at position {i} ({g.name}) is a controlled gate. "
+                        "Only single-qubit parametric gates are supported for batching."
+                    )
+                if len(g.targets) != 1:
+                    raise ValueError(
+                        f"Gate at position {i} ({g.name}) has {len(g.targets)} targets. "
+                        "Only single-qubit parametric gates are supported for batching."
+                    )
+                code = PARAMETRIC_GATE_CODES[g.name]
+                param = g.params[0] if g.params else 0.0
+                info = ParametricGateInfo(
+                    position=i,
+                    gate_name=g.name,
+                    gate_code=code,
+                    qubit=g.targets[0],
+                    original_param=param,
+                )
+                positions.append(i)
+                codes.append(code)
+                info_list.append(info)
+
+        return positions, codes, info_list
 
     def __repr__(self) -> str:
         gate_summary = ', '.join(g.name for g in self.gates[:5])
