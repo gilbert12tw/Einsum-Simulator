@@ -1,28 +1,121 @@
 # Einsum NVQIR Simulator
 
-Convert CUDA-Q quantum circuits to einsum tensor network representation for use with `torch.einsum` or `opt_einsum`.
+Convert CUDA-Q quantum circuits to einsum tensor network representations for contraction with `cuQuantum`, `opt_einsum`, or any other backend.
+
+The simulator intercepts gate operations from CUDA-Q kernels and records them as a tensor network, without performing any actual quantum simulation. The resulting circuit can be contracted by any einsum backend.
+
+## Structure and Benchmarks
+Note: The `benchmarks/` folder in the repository contains cutting-edge research and applications. These are **not included** in the distributed Python package. Future updates will add more applications and benchmarks to test correctness and timing.
 
 ## Features
 
 - Intercept CUDA-Q gate operations and capture full gate matrices
-- Integer index system
-- Output PyTorch sublist format for large circuits
+- Integer index system — no alphabet limit; real circuits exceed 52 unique indices
+- Output in interleaved (sublist) format compatible with cuQuantum `Network`, `opt_einsum`, and PyTorch
+- Works with `cuquantum.tensornet.Network`, `opt_einsum`, `torch.einsum`, and other contraction backends
 
-## Installation
+## Prerequisites
 
-Requires CUDA-Q environment. Build the simulator:
+This project requires a **CUDA-Q** environment with the NVQIR runtime. Choose one of the following installation methods:
+
+- **conda** (recommended for local development): [CUDA-Q conda instructions](https://nvidia.github.io/cuda-quantum/latest/using/install/local_installation.html)
+- **pip**: `pip install cuda-quantum`
+- **Docker**: see [Docker development](#docker-development) below
+
+---
+
+## Installation (For Users)
+
+### pip install (recommended)
+
+Requires CMake and a C++ compiler (`g++`) in addition to CUDA-Q.
 
 ```bash
-mkdir build && cd build
-cmake ..
-make
+# 1. Activate your CUDA-Q environment
+conda activate cudaq-env          # conda
+# or: source /path/to/cudaq/set_env.sh  # pip / manual
+
+# 2. Build and install the package
+pip install .
+
+# 3. Register the simulator with CUDA-Q (one-time step)
+cudaq-einsum-install
+# Or via python:
+# python -c "import cudaq_einsum; cudaq_einsum.install_cudaq_target()"
 ```
+
+Optional dependencies:
+
+```bash
+pip install ".[torch]"       # add PyTorch support
+pip install ".[opt_einsum]"  # add opt_einsum support
+pip install ".[all]"         # add all optional deps
+```
+
+> **Note:** `cudaq-einsum-install` copies `libnvqir-einsum.so` and `einsum.yml`
+> into your CUDA-Q installation directory. You need write access to that directory.
+> Re-run it whenever you reinstall the package.
+
+---
+
+## Development & Contributing
+
+The repository uses a standard standard `src` layout for the Python package (`src/cudaq_einsum`) and a `cpp/` directory for the C++ library.
+
+### Automated Testing
+
+For ease of development, the repository provides unified scripts that auto-detect your CUDA-Q installation, build the library using pip, and run the complete test suite.
+
+**Option 1: Local Environment (Conda or Pip)**
+Ensure your `conda` or local environment with CUDA-Q is active, then run:
+
+```bash
+./scripts/local-build.sh
+```
+
+**Option 2: Docker Environment**
+If you don't want to pollute your host system, you can use the pre-configured CUDA-Q nightly Docker container. The script will automatically build the development image (if it doesn't exist), mount your local repository, build the library, and run tests inside a disposable container setup:
+
+```bash
+./scripts/docker-test.sh
+```
+
+For an interactive development shell inside Docker:
+
+```bash
+./scripts/docker-shell.sh
+# Inside the container, you can manually trigger build and tests:
+./scripts/build-and-test.sh
+```
+
+---
+
+## Troubleshooting & Common Pitfalls
+
+- **`RuntimeError: Cannot find CUDA-Q installation` during `pip install .`**
+  Pip isolated builds sometimes block access to your host system's `sys.path`. The `setup.py` contains explicit fallback heuristics (e.g. searching conda prefix and standard Python paths). If auto-detection fails, explicitly point to your CUDA-Q root installation path:
+  ```bash
+  export CUDAQ_ROOT=/path/to/your/cuda-quantum-installation
+  pip install .
+  ```
+
+- **`ERROR: Library not found: /path/to/libnvqir-einsum.so`**
+  This implies the python bindings loaded but the bundled C++ `.so` file was not created successfully alongside it. Rebuild the package while enforcing recompilation:
+  ```bash
+  pip install . --force-reinstall --no-cache-dir
+  ```
+
+- **Runtime `get_einsum_length` crashes or memory corruptions**
+  This happens if your user application links to a DIFFERENT instance of the CUDA-Q libraries than the `libnvqir-einsum.so` bindings. Ensure you run your code under the exact same conda environment or Docker image that you packaged it with.
+
+---
 
 ## Usage
 
-### 1. Capture Circuit
+### 1. Capture a circuit
 
 ```python
+import cudaq
 from cudaq_einsum import capture_circuit
 
 @cudaq.kernel
@@ -34,49 +127,63 @@ def ghz(n: int):
 
 # Execute kernel and capture circuit structure
 circuit = capture_circuit(ghz, 3)
+
+print(f"Qubits: {circuit.num_qubits}, Gates: {len(circuit.gates)}")
 ```
 
-### 2. Convert to Einsum and Execute
+### 2. Contract with cuQuantum (recommended)
 
 ```python
-import torch
+from cuquantum.tensornet import Network, NetworkOptions
 
-# Get torch.einsum sublist format arguments
-args = circuit.to_torch_sublist_args()
-state = torch.einsum(*args)
-
-print(state)  # GHZ state: [0.707, 0, 0, 0, 0, 0, 0, 0.707]
+args = circuit.to_torch_sublist_args()  # interleaved format
+options = NetworkOptions(blocking="auto", device_id=0)
+network = Network(*args, options=options)
+_, _ = network.contract_path(optimize={'slicing': {'min_slices': 32}})
+state = network.contract()
+network.free()
+state_vector = state.reshape(-1)
 ```
 
-### 3. Or Use opt_einsum
+### 3. Contract with opt_einsum
 
 ```python
 import opt_einsum
 
-tensors, indices, output = circuit.to_operands_and_subscripts()
-# Compose your own opt_einsum call
+args = circuit.to_torch_sublist_args()
+state = opt_einsum.contract(*args, backend='torch')
+state_vector = state.reshape(-1)
 ```
 
-## Why Integer Indices?
+### 4. Get the state vector directly (small circuits only)
 
-Traditional einsum string format `"ij,jk->ik"` only supports character indices, which is insufficient for large circuits.
-
-This project uses PyTorch sublist format:
 ```python
-# String format 
-torch.einsum("ij,jk->ik", A, B)
-
-# Sublist format 
-torch.einsum(A, [0, 1], B, [1, 2], [0, 2])
+# Uses NumPy einsum internally — only practical for circuits with ≤ ~15 qubits.
+state_vector = circuit.get_state_vector()
+print(state_vector)
 ```
 
-## Status
+## API reference
 
-- [x] C++ Sidecar API
-- [x] Gate matrix capture
-- [x] JSON serialization
-- [ ] Python wrapper
-- [ ] End-to-end tests
+| Function / Method | Description |
+|---|---|
+| `capture_circuit(kernel, *args)` | Run kernel, return `EinsumCircuit` |
+| `capture_circuit_json(kernel, *args)` | Return raw circuit JSON string |
+| `install_cudaq_target(cudaq_root=None)` | Copy `.so` + `.yml` to CUDA-Q dirs |
+| `EinsumCircuit.to_torch_sublist_args()` | PyTorch sublist format args |
+| `EinsumCircuit.to_einsum_sublist_args()` | Integer index format (operands, subscripts) |
+| `EinsumCircuit.to_einsum_args()` | NumPy string format |
+| `EinsumCircuit.get_state_vector()` | Contracted state as 1D array |
+| `EinsumCircuit.contract()` | Contracted state as N-D tensor |
+
+## Suppressing log output
+
+By default the simulator runs silently. Gate-level logs (`[Einsum] Gate: ...`) are
+disabled unless you set the environment variable:
+
+```bash
+EINSUM_VERBOSE=1 python your_script.py
+```
 
 ## License
 
