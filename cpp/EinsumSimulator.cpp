@@ -16,20 +16,39 @@
 #include <iostream>
 #include <memory>
 #include <cstring>
+#include <mutex>
+#include <cstdlib>
+
+// Logging: silent by default.  Set EINSUM_VERBOSE=1 to enable gate-level logs.
+static bool g_verbose = []() {
+    const char* v = std::getenv("EINSUM_VERBOSE");
+    return v && v[0] == '1';
+}();
+
+#define EINSUM_LOG(expr) do { if (g_verbose) { expr; } } while(0)
 
 // ============================================================================
-// Sidecar Buffer - Thread-local storage for Python access via ctypes
+// Sidecar Buffer - Global storage for Python access via ctypes.
+//
+// Previously thread_local, which caused the simulator (running on a CUDA-Q
+// worker thread) to write to a different buffer than the one Python reads
+// from on the main thread.  A plain global + mutex is correct here because
+// cudaq.sample() is synchronous: the worker finishes writing before Python
+// calls get_einsum_length() / get_einsum_data().
 // ============================================================================
-static thread_local std::string g_einsum_buffer;
+static std::string  g_einsum_buffer;
+static std::mutex   g_einsum_mutex;
 
 extern "C" {
     /// Get the length of the current einsum buffer
     int get_einsum_length() {
+        std::lock_guard<std::mutex> lock(g_einsum_mutex);
         return static_cast<int>(g_einsum_buffer.length());
     }
 
     /// Copy the einsum data to the provided buffer
     void get_einsum_data(char* buffer) {
+        std::lock_guard<std::mutex> lock(g_einsum_mutex);
         if (buffer && !g_einsum_buffer.empty()) {
             std::memcpy(buffer, g_einsum_buffer.c_str(), g_einsum_buffer.length());
             buffer[g_einsum_buffer.length()] = '\0';
@@ -38,6 +57,7 @@ extern "C" {
 
     /// Clear the einsum buffer
     void clear_einsum_buffer() {
+        std::lock_guard<std::mutex> lock(g_einsum_mutex);
         g_einsum_buffer.clear();
     }
 }
@@ -102,8 +122,8 @@ public:
         // Record initial state
         initialStates.push_back({qubitId, idx});
 
-        std::cout << "[Einsum] Allocated qubit " << qubitId
-                  << " with initial index " << idx << std::endl;
+        EINSUM_LOG(std::cout << "[Einsum] Allocated qubit " << qubitId
+                  << " with initial index " << idx << std::endl);
     }
 
     /// Handle state deallocation
@@ -116,7 +136,7 @@ public:
         initialStates.clear();
         nextIndex = 0;
         numQubits = 0;
-        std::cout << "[Einsum] State deallocated" << std::endl;
+        EINSUM_LOG(std::cout << "[Einsum] State deallocated" << std::endl);
     }
 
     /// Reset the state to |0...0>
@@ -131,7 +151,7 @@ public:
             qubitIndices[q] = idx;
             initialStates.push_back({q, idx});
         }
-        std::cout << "[Einsum] State reset to |0>" << std::endl;
+        EINSUM_LOG(std::cout << "[Einsum] State reset to |0>" << std::endl);
     }
 
     /// Core method: intercept gate operations and record for Einsum
@@ -169,47 +189,49 @@ public:
 
         gateHistory.push_back(record);
 
-        // Log the gate operation
-        std::cout << "[Einsum] Gate: " << task.operationName;
-        if (!task.parameters.empty()) {
-            std::cout << "(";
-            for (size_t i = 0; i < task.parameters.size(); ++i) {
-                if (i > 0) std::cout << ", ";
-                std::cout << task.parameters[i];
+        // Log the gate operation (only when EINSUM_VERBOSE=1)
+        if (g_verbose) {
+            std::cout << "[Einsum] Gate: " << task.operationName;
+            if (!task.parameters.empty()) {
+                std::cout << "(";
+                for (size_t i = 0; i < task.parameters.size(); ++i) {
+                    if (i > 0) std::cout << ", ";
+                    std::cout << task.parameters[i];
+                }
+                std::cout << ")";
             }
-            std::cout << ")";
+            std::cout << " | in: [";
+            for (size_t i = 0; i < record.inputIndices.size(); ++i) {
+                if (i > 0) std::cout << ",";
+                std::cout << record.inputIndices[i];
+            }
+            std::cout << "] -> out: [";
+            for (size_t i = 0; i < record.outputIndices.size(); ++i) {
+                if (i > 0) std::cout << ",";
+                std::cout << record.outputIndices[i];
+            }
+            std::cout << "]" << std::endl;
         }
-        std::cout << " | in: [";
-        for (size_t i = 0; i < record.inputIndices.size(); ++i) {
-            if (i > 0) std::cout << ",";
-            std::cout << record.inputIndices[i];
-        }
-        std::cout << "] -> out: [";
-        for (size_t i = 0; i < record.outputIndices.size(); ++i) {
-            if (i > 0) std::cout << ",";
-            std::cout << record.outputIndices[i];
-        }
-        std::cout << "]" << std::endl;
     }
 
     /// Perform qubit measurement
     bool measureQubit(const std::size_t qubitIdx) override {
-        std::cout << "[Einsum] Measure qubit " << qubitIdx
-                  << " (index: " << qubitIndices[qubitIdx] << ")" << std::endl;
+        EINSUM_LOG(std::cout << "[Einsum] Measure qubit " << qubitIdx
+                  << " (index: " << qubitIndices[qubitIdx] << ")" << std::endl);
         return false;
     }
 
     /// Reset a single qubit to |0>
     void resetQubit(const std::size_t qubitIdx) override {
         qubitIndices[qubitIdx] = nextIndex++;
-        std::cout << "[Einsum] Reset qubit " << qubitIdx << std::endl;
+        EINSUM_LOG(std::cout << "[Einsum] Reset qubit " << qubitIdx << std::endl);
     }
 
     /// Sample the state - triggers export to sidecar
     cudaq::ExecutionResult sample(const std::vector<std::size_t>& qubits,
                                    const int shots) override {
-        std::cout << "[Einsum] Sample requested on " << qubits.size()
-                  << " qubits for " << shots << " shots" << std::endl;
+        EINSUM_LOG(std::cout << "[Einsum] Sample requested on " << qubits.size()
+                  << " qubits for " << shots << " shots" << std::endl);
 
         // Export to sidecar buffer
         exportToSidecar();
@@ -312,10 +334,14 @@ public:
 
         ss << "}\n";
 
-        // Store in sidecar buffer
-        g_einsum_buffer = ss.str();
-        std::cout << "[Einsum] Exported " << g_einsum_buffer.length()
-                  << " bytes to sidecar buffer" << std::endl;
+        // Store in sidecar buffer (lock before writing to shared global)
+        std::string json = ss.str();
+        {
+            std::lock_guard<std::mutex> lock(g_einsum_mutex);
+            g_einsum_buffer = std::move(json);
+        }
+        EINSUM_LOG(std::cout << "[Einsum] Exported " << g_einsum_buffer.length()
+                  << " bytes to sidecar buffer" << std::endl);
     }
 
     /// Observe a spin operator (not implemented)

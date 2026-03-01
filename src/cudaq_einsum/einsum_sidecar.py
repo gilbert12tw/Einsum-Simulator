@@ -24,9 +24,13 @@ class EinsumSidecar:
         json_str = sidecar.get_circuit_json()
     """
 
-    # Default library paths to search
+    # Default library paths to search (in priority order)
     DEFAULT_PATHS = [
+        # 1. Bundled inside the installed Python package (pip install .)
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "libnvqir-einsum.so"),
+        # 2. CUDA-Q system installation (Docker / manual install)
         "/opt/nvidia/cudaq/lib/libnvqir-einsum.so",
+        # 3. Local build directory (development)
         "./build/libnvqir-einsum.so",
         "../build/libnvqir-einsum.so",
     ]
@@ -46,26 +50,65 @@ class EinsumSidecar:
         self._lib = self._load_library()
         self._setup_ctypes()
 
+    @staticmethod
+    def _find_already_loaded_path() -> Optional[str]:
+        """
+        Search /proc/self/maps for libnvqir-einsum.so that is already mapped
+        into the process by CUDA-Q.  Returns the canonical path, or None.
+
+        This is the key to getting the SAME dlopen handle as CUDA-Q: Linux
+        dlopen() deduplicates by canonical path string, so we must pass the
+        exact path that CUDA-Q used — not a copy at a different location.
+        """
+        try:
+            with open("/proc/self/maps", "r") as f:
+                for line in f:
+                    if "libnvqir-einsum.so" in line:
+                        parts = line.strip().split()
+                        if len(parts) >= 6:
+                            path = parts[-1]
+                            if os.path.exists(path):
+                                return path
+        except Exception:
+            pass
+        return None
+
     def _find_library(self, lib_path: Optional[str]) -> str:
-        """Find the einsum library."""
+        """Find the einsum library, preferring the instance already loaded by CUDA-Q."""
         if lib_path is not None:
             if os.path.exists(lib_path):
                 return lib_path
             raise FileNotFoundError(f"Library not found: {lib_path}")
 
-        # Search default paths
-        for path in self.DEFAULT_PATHS:
-            if os.path.exists(path):
-                return path
-
-        # Try environment variable
+        # 1. EINSUM_LIB_PATH env var (explicit override)
         env_path = os.environ.get("EINSUM_LIB_PATH")
         if env_path and os.path.exists(env_path):
             return env_path
 
+        # 2. Already loaded by CUDA-Q — MOST IMPORTANT: same dlopen instance
+        #    guarantees shared global g_einsum_buffer
+        loaded = self._find_already_loaded_path()
+        if loaded:
+            return loaded
+
+        # 3. Static search paths
+        search_paths = list(self.DEFAULT_PATHS)
+        cudaq_root = os.environ.get("CUDAQ_ROOT")
+        if cudaq_root:
+            search_paths.insert(0, os.path.join(cudaq_root, "lib", "libnvqir-einsum.so"))
+
+        for path in search_paths:
+            if os.path.exists(path):
+                return path
+
         raise FileNotFoundError(
-            f"libnvqir-einsum.so not found. Searched: {self.DEFAULT_PATHS}. "
-            "Set EINSUM_LIB_PATH environment variable or pass lib_path explicitly."
+            "libnvqir-einsum.so not found.\n"
+            f"Searched: {search_paths}\n"
+            "Options:\n"
+            "  - pip install . then run: python -c \"import cudaq_einsum; cudaq_einsum.install_cudaq_target()\"\n"
+            "  - Run: ./scripts/local-build.sh\n"
+            "  - Set EINSUM_LIB_PATH=/path/to/libnvqir-einsum.so\n"
+            "  - Pass lib_path explicitly to EinsumSidecar()"
         )
 
     def _load_library(self) -> ctypes.CDLL:

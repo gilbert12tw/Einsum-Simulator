@@ -88,17 +88,30 @@ def capture_circuit(
             "cudaq is required. Please run in a CUDA-Q environment."
         )
 
-    # Get sidecar
-    sidecar = get_sidecar(lib_path)
-
-    # Set target to einsum
+    # Set target before running any kernel.
     cudaq.set_target("einsum")
 
-    # Clear buffer
-    sidecar.clear()
-
-    # Run kernel - use sample() to trigger circuit execution
+    # Run kernel FIRST.
+    #
+    # We intentionally run cudaq.sample() before creating the sidecar because
+    # cudaq.set_target() only registers the target — the actual plugin SO
+    # (libnvqir-einsum.so) is dlopen'd by CUDA-Q the moment the first kernel
+    # executes.  Only after sample() returns is the library guaranteed to be
+    # present in /proc/self/maps.  We can then open the same path via ctypes,
+    # obtaining the *same* dlopen instance and therefore the *same*
+    # g_einsum_buffer that the C++ side wrote into.
+    #
+    # exportToSidecar() *overwrites* g_einsum_buffer (not appends), so no data
+    # is lost by not calling clear() first.
     cudaq.sample(kernel, *args, shots_count=shots, **kwargs)
+
+    # Now the library is in /proc/self/maps.  Force sidecar re-detection so we
+    # always use the path CUDA-Q loaded (same dlopen instance).
+    global _sidecar
+    loaded_path = EinsumSidecar._find_already_loaded_path()
+    if _sidecar is None or (loaded_path and loaded_path != _sidecar.lib_path):
+        _sidecar = None
+    sidecar = get_sidecar(lib_path)
 
     # Retrieve JSON
     json_str = sidecar.get_circuit_json()
@@ -143,10 +156,15 @@ def capture_circuit_json(
     except ImportError:
         raise ImportError("cudaq is required.")
 
-    sidecar = get_sidecar(lib_path)
     cudaq.set_target("einsum")
-    sidecar.clear()
     cudaq.sample(kernel, *args, shots_count=shots, **kwargs)
+
+    # Re-detect sidecar after sample() so we share CUDA-Q's dlopen instance.
+    global _sidecar
+    loaded_path = EinsumSidecar._find_already_loaded_path()
+    if _sidecar is None or (loaded_path and loaded_path != _sidecar.lib_path):
+        _sidecar = None
+    sidecar = get_sidecar(lib_path)
 
     json_str = sidecar.get_circuit_json()
     if json_str is None:
