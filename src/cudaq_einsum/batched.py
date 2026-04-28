@@ -82,6 +82,11 @@ def _make_rotation_matrices_torch(thetas, codes, device=None):
     else:
         codes = codes.to(dtype=torch.long, device=thetas.device)
 
+    orig_device = thetas.device
+    work_device = torch.device("cpu") if orig_device.type == "cuda" else orig_device
+    thetas = thetas.to(work_device)
+    codes = codes.to(work_device)
+
     orig_shape = thetas.shape
     flat = thetas.reshape(-1)
     N = flat.numel()
@@ -107,7 +112,7 @@ def _make_rotation_matrices_torch(thetas, codes, device=None):
     out[:, 0, 1] = torch.where(is_rx, -1j * sinv, torch.where(is_ry, -sinv, 0.0 + 0j))
     out[:, 1, 0] = torch.where(is_rx, -1j * sinv, torch.where(is_ry, sinv, 0.0 + 0j))
 
-    return out.view(*orig_shape, 2, 2)
+    return out.to(orig_device).view(*orig_shape, 2, 2)
 
 
 def build_batched_args(
@@ -222,7 +227,7 @@ def batched_contract(
         batch_rot_mats: (B, num_params, 2, 2) rotation matrices.
         mode: 'amplitude' or 'statevector'.
         target_state: Basis state index for amplitude mode (default 0).
-        optimize: Passed to np.einsum / opt_einsum (ignored for torch).
+        optimize: Passed to np.einsum / opt_einsum / cuquantum.contract.
 
     Returns:
         Contracted result — (B,) complex for amplitude mode,
@@ -236,8 +241,13 @@ def batched_contract(
     is_torch = _is_torch_tensor(batch_rot_mats)
 
     if is_torch:
-        import torch
-        return torch.einsum(*args)
+        try:
+            from cuquantum import contract
+            cuq_optimize = None if optimize is True else optimize
+            return contract(*args, optimize=cuq_optimize)
+        except ImportError:
+            import torch
+            return torch.einsum(*args)
     else:
         try:
             import opt_einsum

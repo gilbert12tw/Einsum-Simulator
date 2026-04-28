@@ -229,7 +229,8 @@ public:
 
     /// Sample the state - triggers export to sidecar
     cudaq::ExecutionResult sample(const std::vector<std::size_t>& qubits,
-                                   const int shots) override {
+                                   const int shots,
+                                   const bool) override {
         EINSUM_LOG(std::cout << "[Einsum] Sample requested on " << qubits.size()
                   << " qubits for " << shots << " shots" << std::endl);
 

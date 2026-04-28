@@ -252,6 +252,30 @@ A complete, runnable QSVM example is in [`examples/11_qsvm_batching.py`](example
 > For production, pass the output of `build_batched_args()` directly to
 > `cuQuantum`'s `Network` for GPU acceleration and optimal path finding.
 
+## Experimental multi-stream backend
+
+An optional C++/cuTENSOR backend can be used for QSVM-style batched amplitude
+evaluation after the pybind module has been built in `cpp_backend/`.
+
+```python
+from cudaq_einsum.multistream import multistream_batched_contract
+
+amps = multistream_batched_contract(
+    captured_circuit,
+    param_positions,
+    rotation_matrices,
+)
+```
+
+If you need to split setup time from contraction time, use:
+
+```python
+from cudaq_einsum.multistream import (
+    prepare_multistream_backend,
+    run_prepared_multistream,
+)
+```
+
 ## API reference
 
 | Function / Method | Description |

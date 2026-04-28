@@ -29,17 +29,27 @@ from typing import Optional
 
 __version__ = "0.1.0"
 
-# Support both package import and direct path import
+from .einsum_sidecar import EinsumSidecar
+from .einsum_circuit import EinsumCircuit, ParametricGateInfo, PARAMETRIC_GATE_CODES
+from .cudaq_einsum import capture_circuit
+from .batched import make_rotation_matrices, build_batched_args, batched_contract
+
 try:
-    from .einsum_sidecar import EinsumSidecar
-    from .einsum_circuit import EinsumCircuit, ParametricGateInfo, PARAMETRIC_GATE_CODES
-    from .cudaq_einsum import capture_circuit
-    from .batched import make_rotation_matrices, build_batched_args, batched_contract
-except ImportError:
-    from einsum_sidecar import EinsumSidecar
-    from einsum_circuit import EinsumCircuit, ParametricGateInfo, PARAMETRIC_GATE_CODES
-    from cudaq_einsum import capture_circuit
-    from batched import make_rotation_matrices, build_batched_args, batched_contract
+    from .multistream import (
+        multistream_batched_contract,
+        prepare_multistream_backend,
+        run_prepared_multistream,
+    )
+except Exception as exc:
+    def _raise_multistream_unavailable(*args, **kwargs):
+        raise RuntimeError(
+            "The optional multi-stream backend is unavailable in this environment. "
+            "Build the C++ extension and ensure its Python dependencies are installed."
+        ) from exc
+
+    multistream_batched_contract = _raise_multistream_unavailable
+    prepare_multistream_backend = _raise_multistream_unavailable
+    run_prepared_multistream = _raise_multistream_unavailable
 
 
 def _find_cudaq_root() -> Optional[str]:
@@ -169,4 +179,7 @@ __all__ = [
     "make_rotation_matrices",
     "build_batched_args",
     "batched_contract",
+    "multistream_batched_contract",
+    "prepare_multistream_backend",
+    "run_prepared_multistream",
 ]
